@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Link Generator</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      background-color: #e5e5e5;
+    }
+    .sidebar {
+      width: 240px;
+      height: 100vh;
+      background-color: #1f2d3d;
+      color: white;
+      float: left;
+      padding: 20px;
+    }
+    .sidebar h3 {
+      margin-top: 40px;
+    }
+    .content {
+      margin-left: 260px;
+      padding: 20px;
+    }
+    .card {
+      background-color: white;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+    .input-group {
+      display: flex;
+      gap: 10px;
+      margin: 10px 0;
+    }
+    select, input[type="text"] {
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+      flex: 1;
+    }
+    textarea {
+      width: 100%;
+      height: 60px;
+      margin: 10px 0;
+      padding: 10px;
+      border-radius: 5px;
+      border: 1px solid #ccc;
+    }
+    .param-editor, .event-editor {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .param-editor input, .event-editor input {
+      flex: 1;
+    }
+    .param-editor button, .event-editor button {
+      padding: 5px 10px;
+    }
+    .history-entry {
+      padding: 10px;
+      border-bottom: 1px solid #ddd;
+    }
+    .history-entry:last-child {
+      border-bottom: none;
+    }
+    .link-label {
+      font-weight: bold;
+    }
+    .link-url {
+      color: #007bff;
+      font-size: 0.9em;
+      word-break: break-word;
+    }
+    .share-icon {
+      float: right;
+      cursor: pointer;
+    }
+    #history {
+      max-height: 300px;
+      overflow-y: auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="sidebar">
+    <p>Link tool</p>
+  </div>
+
+  <div class="content">
+    <div class="card">
+      <h2>Link Generator</h2>
+      <form id="linkForm">
+        <div class="input-group">
+          <select id="platformSelect" onchange="handlePlatformChange()">
+            <option value="appsflyer">Appsflyer</option>
+            <option value="adjust">Adjust</option>
+          </select>
+          <select id="linkType">
+            <option value="cta">CTA</option>
+            <option value="vta">VTA</option>
+          </select>
+          <input type="text" id="appOrTracker" placeholder="App id"/>
+        </div>
+        <div id="adjustOptions" style="display:none">
+          <label><input type="checkbox" id="prefixAdjust"/> Add adj_ prefix to all parameters</label>
+        </div>
+        <textarea id="trackingLink" placeholder="Paste the link here">https://app.appsflyer.com/{app_id}?pid={media_source}&af_siteid={ApplicationID}&c={CampaignName}</textarea>
+        <input type="text" id="linkName" placeholder="Enter name for link" style="width:100%;padding:10px;margin:10px 0;"/>
+        <div id="paramsContainer"></div>
+        <button type="button" onclick="addParamEditor()">+ Add Custom Param</button>
+        <br/><br/>
+        <div id="adjustEvents" style="display:none">
+          <h4>Adjust Event Generator</h4>
+          <div id="eventContainer"></div>
+          <button type="button" onclick="addEventEditor()">+ Add Event</button>
+        </div>
+        <br/>
+        <button type="submit">Save Link</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3>Link History</h3>
+      <input type="text" id="searchBox" placeholder="Search by name" style="width:100%;padding:10px;margin-bottom:10px;" oninput="renderHistory()"/>
+      <div id="history"></div>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('linkForm');
+    const trackingLink = document.getElementById('trackingLink');
+    const paramsContainer = document.getElementById('paramsContainer');
+    const eventContainer = document.getElementById('eventContainer');
+    const historyDiv = document.getElementById('history');
+    const searchBox = document.getElementById('searchBox');
+    const linkNameInput = document.getElementById('linkName');
+    const platformSelect = document.getElementById('platformSelect');
+    const linkType = document.getElementById('linkType');
+    const appOrTracker = document.getElementById('appOrTracker');
+    const prefixAdjust = document.getElementById('prefixAdjust');
+    const adjustEvents = document.getElementById('adjustEvents');
+    const adjustOptions = document.getElementById('adjustOptions');
+
+    const STORAGE_KEY = 'link_tool_data';
+
+    function saveLinkInternally(label, url) {
+      const existing = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+      existing.unshift({ label, url }); // newest first
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(existing));
+    }
+
+    function fetchLinkHistoryInternally() {
+      return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    }
+
+    function parseParams(url) {
+      try {
+        const parsed = new URL(url);
+        return [...parsed.searchParams.entries()].map(([key, value]) => ({ key, value }));
+      } catch (e) {
+        return [];
+      }
+    }
+
+    function detectPlatformFromUrl(url) {
+      if (url.includes('app.appsflyer.com')) return 'appsflyer';
+      if (url.includes('app.adjust.com')) return 'adjust';
+      return '';
+    }
+
+    function detectLinkTypeFromUrl(url) {
+      if (url.includes('click')) return 'cta';
+      if (url.includes('view') || url.includes('impression')) return 'vta';
+      return 'cta';
+    }
+
+    function renderParams(url) {
+      paramsContainer.innerHTML = '';
+      eventContainer.innerHTML = '';
+      const params = parseParams(url);
+      params.forEach(({ key, value }) => {
+        if (key.startsWith('event_callback_')) {
+          const token = key.replace('event_callback_', '');
+          addEventEditor(token);
+        } else {
+          addParamEditor(key, value);
+        }
+      });
+    }
+
+    function addParamEditor(key = '', value = '') {
+      const div = document.createElement('div');
+      div.className = 'param-editor';
+      div.innerHTML = `
+        <input type="text" placeholder="Key" value="${key}" />
+        <input type="text" placeholder="Value" value="${value}" />
+        <button type="button" onclick="this.parentElement.remove()">❌</button>
+      `;
+      paramsContainer.appendChild(div);
+    }
+
+    function addEventEditor(token = '') {
+      const div = document.createElement('div');
+      div.className = 'event-editor';
+      div.innerHTML = `
+        <input type="text" placeholder="Event Token" value="${token}" />
+        <button type="button" onclick="this.parentElement.remove()">❌</button>
+      `;
+      eventContainer.appendChild(div);
+    }
+
+    trackingLink.addEventListener('blur', () => {
+      const url = trackingLink.value;
+      const platform = detectPlatformFromUrl(url);
+      const type = detectLinkTypeFromUrl(url);
+
+      platformSelect.value = platform || 'appsflyer';
+      linkType.value = type || 'cta';
+      handlePlatformChange();
+      renderParams(url);
+    });
+
+    function renderHistory() {
+      const filter = searchBox.value.toLowerCase();
+      const history = fetchLinkHistoryInternally();
+      historyDiv.innerHTML = history
+        .filter(h => h.label.toLowerCase().includes(filter))
+        .map((item, i) => `
+          <div class="history-entry">
+            <span class="link-label">${i + 1}. ${item.label}</span><br />
+            <span class="link-url">${item.url}</span>
+            <span class="share-icon" onclick="navigator.clipboard.writeText('${item.url}')">🔗</span>
+          </div>
+        `)
+        .join('');
+    }
+
+    function handlePlatformChange() {
+      const selected = platformSelect.value;
+      if (selected === 'adjust') {
+        appOrTracker.placeholder = 'Tracker';
+        adjustEvents.style.display = 'block';
+        adjustOptions.style.display = 'block';
+      } else {
+        appOrTracker.placeholder = 'App id';
+        adjustEvents.style.display = 'none';
+        adjustOptions.style.display = 'none';
+      }
+    }
+
+    function updateLiveLinkPreview() {
+      let baseUrl = trackingLink.value.split('?')[0];
+      const newParams = new URLSearchParams();
+      const selectedPlatform = platformSelect.value;
+      const inputs = paramsContainer.querySelectorAll('.param-editor');
+
+      inputs.forEach(div => {
+        const [keyInput, valueInput] = div.querySelectorAll('input');
+        if (keyInput.value && valueInput.value) {
+          let key = keyInput.value;
+          if (selectedPlatform === 'adjust' && prefixAdjust.checked && !key.startsWith('adj_')) {
+            key = `adj_${key}`;
+          }
+          newParams.set(key, valueInput.value);
+        }
+      });
+
+      if (selectedPlatform === 'adjust') {
+        if (!Array.from(newParams.keys()).includes('tracker_limit')) {
+          newParams.set('tracker_limit', '250000');
+        }
+        const events = eventContainer.querySelectorAll('.event-editor');
+        events.forEach(div => {
+          const [tokenInput] = div.querySelectorAll('input');
+          if (tokenInput.value) {
+            const token = tokenInput.value;
+            newParams.set(`event_callback_${token}`, `cpp_icb{id}&event_id=${token}`);
+          }
+        });
+      }
+
+      trackingLink.value = `${baseUrl}?${newParams.toString()}`;
+    }
+
+    paramsContainer.addEventListener('input', updateLiveLinkPreview);
+    eventContainer.addEventListener('input', updateLiveLinkPreview);
+    prefixAdjust.addEventListener('change', updateLiveLinkPreview);
+
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      updateLiveLinkPreview();
+      const label = linkNameInput.value || 'Unnamed Link';
+      saveLinkInternally(label, trackingLink.value);
+      renderHistory();
+      form.reset();
+      paramsContainer.innerHTML = '';
+      eventContainer.innerHTML = '';
+    });
+
+    renderHistory();
+  </script>
+</body>
+</html>
